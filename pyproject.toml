@@ -1,0 +1,14 @@
+[project]
+name = "understanding-pi0"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "lerobot[pi,libero]",
+    "transformers",
+]
+
+[tool.uv.sources]
+lerobot = { path = "../lerobot", editable = true }
+transformers = { path = "../transformers", editable = true }
