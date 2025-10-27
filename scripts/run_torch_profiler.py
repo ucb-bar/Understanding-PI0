@@ -1,11 +1,11 @@
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from lerobot.policies.pi0 import PI0Config, PI0Policy
 from lerobot.policies.pi0.processor_pi0 import make_pi0_pre_post_processors
 from lerobot.configs.types import FeatureType, PolicyFeature
-import matplotlib.pyplot as plt
-import numpy as np
-from collections import defaultdict
-import json
 
 
 MAX_ACTION_DIM = 16
@@ -157,6 +157,7 @@ def run_once():
     return actions_processed
 
 
+# warm up
 for _ in range(10):
     run_once()
 
@@ -174,9 +175,13 @@ with torch.profiler.profile(
     for _ in range(1):
         run_once()
 
-profiler.export_chrome_trace("pi0_trace.json")
-profiler.export_memory_timeline("pi0_memory_timeline.html")
-profiler.export_stacks("pi0_stacks.json")
+report_dir = Path("reports")
+report_dir.mkdir(parents=True, exist_ok=True)
+
+profiler.export_chrome_trace(str(report_dir / "chrome_trace.json"))
+profiler.export_memory_timeline(str(report_dir / "memory_timeline.html"))
+profiler.export_memory_timeline(str(report_dir / "memory_timeline.json.gz"))
+profiler.export_stacks(str(report_dir / "stacks.json"))
 
 
 model_params = sum(p.numel() for p in policy.parameters())
@@ -196,15 +201,55 @@ print(f"Model total FLOPs: {total_flops} ({total_flops / (1e12):.2f} T)")
 
 print("Ordered by CUDA time total:")
 print(profiler.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-with open("pi0_cuda_time_total.txt", "w") as f:
+with open(report_dir / "cuda_time_total.log", "w") as f:
     f.write(profiler.key_averages(group_by_input_shape=True).table(sort_by="cuda_time_total", row_limit=100))
+
+print("Ordered by self CUDA time total:")
+print(profiler.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+with open(report_dir / "self_cuda_time_total.log", "w") as f:
+    f.write(profiler.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=100))
 
 print("Ordered by FLOPs:")
 print(profiler.key_averages().table(sort_by="flops", row_limit=10))
-with open("pi0_flops.txt", "w") as f:
+with open(report_dir / "flops.log", "w") as f:
     f.write(profiler.key_averages(group_by_input_shape=True).table(sort_by="flops", row_limit=100))
 
 print("Ordered by CUDA memory usage:")
-print(profiler.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
-with open("pi0_cuda_memory_usage.txt", "w") as f:
-    f.write(profiler.key_averages(group_by_input_shape=True).table(sort_by="cuda_memory_usage", row_limit=100))
+print(profiler.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
+with open(report_dir / "self_cuda_memory_usage.log", "w") as f:
+    f.write(profiler.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_memory_usage", row_limit=100))
+
+
+report_data = profiler.key_averages(group_by_input_shape=True)
+report_data.sort(key=lambda x: x.self_device_time_total, reverse=True)
+
+kernels = []
+kernel_names = []
+time_usage = []
+
+for item in report_data:
+    if "aten" in item.key:
+        kernels.append(item)
+        kernel_names.append(f"{item.key} {item.input_shapes}")
+        time_usage.append(item.self_device_time_total)  # in us
+
+    if len(kernels) > 10:
+        # only show the top 10 kernels
+        break
+
+time_usage = np.array(time_usage, dtype=np.float32)
+time_usage *= 1e-3  # convert to ms
+
+
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.bar(kernel_names, time_usage)
+ax.set_xlabel("Kernel")
+ax.set_ylabel("Time (ms)")
+ax.set_title("Time usage by kernel")
+fig.savefig(report_dir / "time_usage.png")
+
+# also do a pie chart of the time usage
+fig, ax = plt.subplots(figsize=(10, 5))
+ax.pie(time_usage, labels=kernel_names, autopct="%1.1f%%")
+ax.set_title("Time usage by kernel")
+fig.savefig(report_dir / "time_usage_pie.png")
