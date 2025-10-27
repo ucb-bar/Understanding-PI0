@@ -88,9 +88,9 @@ observations = {
     "observation.state": torch.randn(
         batch_size, STATE_DIM, dtype=torch.float32, device=device
     ),
-    "action": torch.randn(
-        batch_size, ACTION_HORIZON, ACTION_DIM, dtype=torch.float32, device=device
-    ),
+    # "action": torch.randn(
+    #     batch_size, ACTION_HORIZON, ACTION_DIM, dtype=torch.float32, device=device
+    # ),
     # Create images in [0, 1] range as expected by LeRobot (will be converted to [-1, 1] internally)
     "observation.images.base_0_rgb": torch.rand(
         batch_size, 3, 224, 224, dtype=torch.float32, device=device
