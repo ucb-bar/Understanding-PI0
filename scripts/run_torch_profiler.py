@@ -227,29 +227,37 @@ kernels = []
 kernel_names = []
 time_usage = []
 
-for item in report_data:
-    if "aten" in item.key:
-        kernels.append(item)
-        kernel_names.append(f"{item.key} {item.input_shapes}")
-        time_usage.append(item.self_device_time_total)  # in us
+remaining_time = 0
 
-    if len(kernels) > 10:
-        # only show the top 10 kernels
-        break
+for item in report_data:
+    if len(kernels) < 20:
+        if "aten" in item.key:
+            kernels.append(item)
+            kernel_names.append(f"{item.key} {item.input_shapes}")
+            time_usage.append(item.self_device_time_total)  # in us
+
+    else:
+        remaining_time += item.self_device_time_total
+
+kernel_names.append("Remaining")
+time_usage.append(remaining_time)
 
 time_usage = np.array(time_usage, dtype=np.float32)
 time_usage *= 1e-3  # convert to ms
 
 
-fig, ax = plt.subplots(figsize=(10, 5))
+fig, ax = plt.subplots(figsize=(12, 8))
 ax.bar(kernel_names, time_usage)
 ax.set_xlabel("Kernel")
 ax.set_ylabel("Time (ms)")
-ax.set_title("Time usage by kernel")
-fig.savefig(report_dir / "time_usage.png")
+ax.set_xticklabels(kernel_names, rotation=45, ha="right")
+ax.set_title("Kernel percentage by time")
+plt.tight_layout()
+fig.savefig(report_dir / "time_usage.png", bbox_inches='tight', pad_inches=0.5)
 
 # also do a pie chart of the time usage
-fig, ax = plt.subplots(figsize=(10, 5))
+fig, ax = plt.subplots(figsize=(12, 8))
 ax.pie(time_usage, labels=kernel_names, autopct="%1.1f%%")
-ax.set_title("Time usage by kernel")
-fig.savefig(report_dir / "time_usage_pie.png")
+ax.set_title("Kernel percentage by time")
+plt.tight_layout()
+fig.savefig(report_dir / "time_usage_pie.png", bbox_inches='tight', pad_inches=0.5)
