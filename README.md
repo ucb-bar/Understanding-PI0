@@ -125,5 +125,6 @@ PI0Policy(
 
 The inference can be separated into three parts. The `vision_tower` handles the encoding of image from the input RGB space into token space. `language_model` contains the main VLM model, and the `gemma_expert` is the smaller action expert that generates the target position using flow-matching process.
 
+Total model parameter is 3,501,339,392 (3.50 B), in which the SigLIP vision model accounts for 412,442,352 (412.44 M), Gemma language model takes up 2,508,531,712 (2508.53 M), and the flow-matching action expert model accounts for 574,788,608 (574.79 M) parameters.
 
-
+The total required amount of FLOPs is 4,354,614,038,072 (4.35 T) for one inference step.
