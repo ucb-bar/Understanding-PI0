@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Iterable
@@ -33,9 +34,19 @@ class QuantizeResult:
     error: str | None = None
 
 
-def make_mx_config() -> MXDynamicActivationMXWeightConfig:
-    # EMULATED is the right default for development on non-Blackwell GPUs.
-    kernel_pref = getattr(KernelPreference, "EMULATED", KernelPreference.AUTO)
+def _resolve_kernel_preference(name: str | None) -> KernelPreference:
+    if not name:
+        return KernelPreference.AUTO
+    lookup = name.strip().upper()
+    if hasattr(KernelPreference, lookup):
+        return getattr(KernelPreference, lookup)
+    raise ValueError(f"Unsupported KernelPreference '{name}'")
+
+
+def make_mx_config(kernel_preference: str | None = None) -> MXDynamicActivationMXWeightConfig:
+    kernel_pref = _resolve_kernel_preference(
+        kernel_preference or os.environ.get("UNDERSTANDING_PI0_MX_KERNEL_PREFERENCE")
+    )
     return MXDynamicActivationMXWeightConfig(
         block_size=32,
         activation_dtype=torch.float8_e4m3fn,
@@ -70,9 +81,10 @@ def safe_quantize_linears_(
     model: nn.Module,
     plan: OrderedDict[str, str | None],
     quant_device: str | None = None,
+    mx_kernel_preference: str | None = None,
     verbose: bool = True,
 ) -> list[QuantizeResult]:
-    mx_cfg = make_mx_config()
+    mx_cfg = make_mx_config(mx_kernel_preference)
     int8_cfg = make_int8_config()
 
     results: list[QuantizeResult] = []

@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from understanding_pi0.common.env import print_runtime_info, seed_all, warn_if_mx_execution_unavailable
-from understanding_pi0.common.mx_exportable import clone_and_rewrite_mx_linears_for_export
+from understanding_pi0.common.mx_exportable import clone_and_rewrite_quantized_linears_for_export
 from understanding_pi0.common.torchao_utils import safe_quantize_linears_
 from understanding_pi0.smolvla_mx.loader import build_dummy_processed_inputs, load_smolvla_policy
 from understanding_pi0.smolvla_mx.quant_recipe import build_quant_plan
@@ -29,7 +29,7 @@ def main():
     ap.add_argument("--image-w", type=int, default=256)
     ap.add_argument("--prompt-len", type=int, default=8)
     ap.add_argument("--no-vision", action="store_true")
-    ap.add_argument("--exportable-mx", action="store_true", default=True)
+    ap.add_argument("--no-exportable-mx", action="store_true")
     args = ap.parse_args()
 
     seed_all(args.seed)
@@ -47,12 +47,12 @@ def main():
         verbose=False,
     )
 
-    if args.exportable_mx:
-        quantized, records = clone_and_rewrite_mx_linears_for_export(
+    if not args.no_exportable_mx:
+        quantized, records = clone_and_rewrite_quantized_linears_for_export(
             quantized, compute_dtype=torch.bfloat16, verbose=False
         )
         n_replaced = sum(int(r.replaced) for r in records)
-        print(f"[mx_exportable] replaced {n_replaced} MX linears for validation")
+        print(f"[exportable_linear] replaced {n_replaced} quantized linears for validation")
 
     sample = build_dummy_processed_inputs(
         baseline,

@@ -1,4 +1,48 @@
-# Understanding PI0
+# Understanding PI0 / SmolVLA MX Export
+
+This branch contains the SmolVLA MX quantization and IREE export workflow.
+
+It is focused on:
+- inspecting the SmolVLA module structure and quantization plan
+- applying TorchAO MX FP8 as much as possible, with fallback for unsupported layers
+- validating one-step numerics after quantization
+- exporting a one-step SmolVLA wrapper to Torch-MLIR / IREE via `iree-turbine`
+
+## Repository layout
+
+- `scripts/quantizing_smolvla/inspect_fqns.py`  
+  Print all `nn.Linear` FQNs, shapes, dtypes, bucket assignment, and quantization plan.
+
+- `scripts/quantizing_smolvla/quantize_mx.py`  
+  Apply the quantization recipe and save a checkpoint payload plus JSON report.
+
+- `scripts/quantizing_smolvla/validate_one_step.py`  
+  Compare one-step baseline vs quantized outputs.
+
+- `scripts/export_iree.py`  
+  Apply IREE/Turbine dtype patches, rewrite quantized linears into exportable wrappers, and export MLIR or VMFB.
+
+- `understanding_pi0/common/iree_ocp_patch.py`  
+  Runtime patches for IREE Turbine / FX importer dtype transport and importer compatibility.
+
+- `understanding_pi0/common/mx_exportable.py`  
+  Export-time wrappers for quantized linears:
+  - MX linears stay in MX storage and dequantize explicitly in forward
+  - non-MX quantized linears are rewritten to dequantized export wrappers
+
+## Requirements
+
+- Python 3.12
+- `uv`
+- CUDA-capable PyTorch environment if exporting from GPU
+- sibling checkout of `lerobot` at `../lerobot`
+
+This repo uses an editable source dependency:
+
+```toml
+[tool.uv.sources]
+lerobot = { path = "../lerobot", editable = true }
+```
 
 This repository contains some basic scripts to understand the [PI0 policy](https://github.com/Physical-Intelligence/openpi).
 
@@ -8,17 +52,86 @@ This repository contains some basic scripts to understand the [PI0 policy](https
 We use the Huggingface implementation of PI0 policy. In order to look into the source code, it is recommended to pull the lerobot and transformers source code.
 
 ```bash
+mkdir -p ../third_party
+cd ../third_party
+
+git clone -b mlir-smolvla https://github.com/ucb-bar/Understanding-PI0.git
 git clone https://github.com/huggingface/lerobot.git
 ```
 
-Note that to use transformers with lerobot, we need to checkout to this specific branch:
+Then install:
 
 ```bash
-git clone https://github.com/huggingface/transformers.git
-cd ./transformers/
-git checkout fix/lerobot_openpi
+cd Understanding-PI0
+uv python pin 3.12
+uv sync --extra export_iree
 ```
 
+## E2E workflow
+
+1. Inspect the quantization plan
+
+```bash
+uv run python scripts/quantizing_smolvla/inspect_fqns.py \
+  --model-id lerobot/smolvla_base \
+  --device cuda
+```
+
+2. Quantize and save artifacts
+
+```bash
+uv run python scripts/quantizing_smolvla/quantize_mx.py \
+  --model-id lerobot/smolvla_base \
+  --device cuda \
+  --out reports/smolvla_mx/smolvla_mx_quantized.pt \
+  --report-json reports/smolvla_mx/quant_report.json
+```
+
+Optional smoke test:
+
+```bash
+uv run python scripts/quantizing_smolvla/quantize_mx.py \
+  --model-id lerobot/smolvla_base \
+  --device cuda \
+  --smoke-test
+```
+
+3. Validate one-step numerics
+
+```bash
+uv run python scripts/quantizing_smolvla/validate_one_step.py \
+  --model-id lerobot/smolvla_base \
+  --device cuda
+```
+
+4. Export MLIR
+
+```bash
+uv run python scripts/export_iree.py \
+  --model-id lerobot/smolvla_base \
+  --device cuda \
+  --print-readable \
+  --out reports/smolvla_mx/smolvla_one_step.mlir
+```
+
+5. Optionally compile VMFB
+
+```bash
+uv run python scripts/export_iree.py \
+  --model-id lerobot/smolvla_base \
+  --device cuda \
+  --compile-vmfb \
+  --out reports/smolvla_mx/smolvla_one_step.mlir \
+  --vmfb-out reports/smolvla_mx/smolvla_one_step.vmfb
+```
+
+### Expected Outputs
+
+After a successful run you should see:
+
+- `reports/smolvla_mx/quant_report.json`
+- `reports/smolvla_mx/smolvla_mx_quantized.pt`
+- `reports/smolvla_mx/smolvla_one_step.mlir`
 
 ## PI0 Model
 

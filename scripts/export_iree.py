@@ -83,6 +83,11 @@ def main():
     ap.add_argument("--no-vision", action="store_true")
     ap.add_argument("--no-quant", action="store_true")
     ap.add_argument("--no-exportable-mx", action="store_true")
+    ap.add_argument(
+        "--mx-kernel-preference",
+        default="AUTO",
+        help="KernelPreference for MX quantization (for example: AUTO or EMULATED).",
+    )
     ap.add_argument("--skip-patches", action="store_true")
 
     ap.add_argument("--print-readable", action="store_true")
@@ -111,6 +116,7 @@ def main():
             policy,
             plan=plan,
             quant_device=args.device,
+            mx_kernel_preference=args.mx_kernel_preference,
             verbose=False,
         )
 
