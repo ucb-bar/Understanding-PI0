@@ -20,5 +20,11 @@ export_iree = [
   "iree-turbine",
 ]
 
+[tool.uv]
+# evdev >=1.9 ships pre-generated ecodes referencing Linux 6.11+ constants
+# (KEY_ACCESSIBILITY, KEY_DO_NOT_DISTURB) that fail to compile on older kernels.
+# Cap to <1.9 so uv resolves a version that builds everywhere.
+constraint-dependencies = ["evdev<1.9"]
+
 [tool.uv.sources]
 lerobot = { path = "../lerobot", editable = true }
