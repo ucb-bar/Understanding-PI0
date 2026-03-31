@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [manifest]
-constraints = [{ name = "evdev", specifier = "<1.9" }]
+overrides = [{ name = "evdev", marker = "sys_platform == 'none'" }]
 
 [[package]]
 name = "accelerate"
@@ -1348,7 +1348,7 @@ name = "pynput"
 version = "1.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "evdev", marker = "'linux' in sys_platform" },
+    { name = "evdev", marker = "sys_platform == 'none'" },
     { name = "pyobjc-framework-applicationservices", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
     { name = "python-xlib", marker = "'linux' in sys_platform" },
