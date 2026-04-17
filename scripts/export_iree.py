@@ -15,6 +15,7 @@ from understanding_pi0.common.env import (
     seed_all,
     warn_if_mx_execution_unavailable,
 )
+from understanding_pi0.common.fp8_po2_quant import apply_fp8_po2_quantization
 from understanding_pi0.common.iree_ocp_patch import apply_all_iree_ocp_patches
 from understanding_pi0.common.mx_exportable import clone_and_rewrite_quantized_linears_for_export
 from understanding_pi0.common.torchao_utils import safe_quantize_linears_
@@ -84,6 +85,15 @@ def main():
     ap.add_argument("--no-quant", action="store_true")
     ap.add_argument("--no-exportable-mx", action="store_true")
     ap.add_argument(
+        "--quant-mode",
+        choices=["mx", "fp8-po2"],
+        default="mx",
+        help=(
+            "Quantization scheme: 'mx' (MX block fp8 with int8 fallback, default) "
+            "or 'fp8-po2' (per-tensor fp8 po2, no int8 fallback)."
+        ),
+    )
+    ap.add_argument(
         "--mx-kernel-preference",
         default="AUTO",
         help="KernelPreference for MX quantization (for example: AUTO or EMULATED).",
@@ -111,28 +121,43 @@ def main():
 
     # Apply quantization recipe
     if not args.no_quant:
-        plan = build_quant_plan(policy, quantize_vision=not args.no_vision)
-        _ = safe_quantize_linears_(
-            policy,
-            plan=plan,
-            quant_device=args.device,
-            mx_kernel_preference=args.mx_kernel_preference,
-            verbose=False,
-        )
+        if args.quant_mode == "fp8-po2":
+            # Per-tensor FP8 po2: no block_size constraint, no int8 fallback.
+            # Quantizes + wraps in ExportableFP8Po2Linear in one step.
+            policy, records = apply_fp8_po2_quantization(
+                policy,
+                quantize_vision=not args.no_vision,
+                compute_dtype=torch.bfloat16,
+                verbose=True,
+            )
+            from understanding_pi0.common.fp8_po2_quant import summarize_fp8_po2_records
 
-    # Rewrite MXTensor-backed linears into exportable wrappers that:
-    #   - keep MX storage
-    #   - explicitly dequantize inside forward
-    # This is required on non-SM100 hardware to avoid MXTensor eager dispatch
-    # failures such as aten.expand.
-    if not args.no_exportable_mx:
-        policy, records = clone_and_rewrite_quantized_linears_for_export(
-            policy,
-            compute_dtype=torch.bfloat16,
-            verbose=False,
-        )
-        n_replaced = sum(int(r.replaced) for r in records)
-        print(f"[exportable_linear] replaced {n_replaced} MX linears for export")
+            summary = summarize_fp8_po2_records(records)
+            print(f"[fp8_po2] summary: {summary}")
+        else:
+            # MX block quantization with int8 fallback (original path).
+            plan = build_quant_plan(policy, quantize_vision=not args.no_vision)
+            _ = safe_quantize_linears_(
+                policy,
+                plan=plan,
+                quant_device=args.device,
+                mx_kernel_preference=args.mx_kernel_preference,
+                verbose=False,
+            )
+
+            # Rewrite MXTensor-backed linears into exportable wrappers that:
+            #   - keep MX storage
+            #   - explicitly dequantize inside forward
+            # This is required on non-SM100 hardware to avoid MXTensor eager
+            # dispatch failures such as aten.expand.
+            if not args.no_exportable_mx:
+                policy, records = clone_and_rewrite_quantized_linears_for_export(
+                    policy,
+                    compute_dtype=torch.bfloat16,
+                    verbose=False,
+                )
+                n_replaced = sum(int(r.replaced) for r in records)
+                print(f"[exportable_linear] replaced {n_replaced} MX linears for export")
 
     # Build processed example inputs
     sample = build_dummy_processed_inputs(

@@ -55,7 +55,7 @@ def one_step_no_cache(
     state_dtype = _first_param_dtype(model.state_proj, torch.bfloat16)
     action_dtype = _first_param_dtype(model.action_in_proj, torch.bfloat16)
     time_dtype = _first_param_dtype(model.action_time_mlp_in, action_dtype)
-    out_dtype = _first_param_dtype(model.action_out_proj, torch.float32)
+    out_dtype = _first_param_dtype(model.action_out_proj, torch.bfloat16)
 
     images = _maybe_cast_list(images, vision_dtype)
     state = _maybe_cast_tensor(state, state_dtype)

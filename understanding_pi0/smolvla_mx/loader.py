@@ -67,7 +67,7 @@ def build_dummy_raw_batch(
     batch: dict[str, Any] = {}
 
     for key in image_keys:
-        batch[key] = torch.rand(batch_size, 3, h, w, device=device, dtype=torch.float32)
+        batch[key] = torch.rand(batch_size, 3, h, w, device=device, dtype=torch.bfloat16)
 
     batch[OBS_STATE] = torch.randn(
         batch_size,
