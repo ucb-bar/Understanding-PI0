@@ -22,6 +22,9 @@ It is focused on:
 - `scripts/export_iree.py`  
   Apply IREE/Turbine dtype patches, rewrite quantized linears into exportable wrappers, and export MLIR or VMFB.
 
+- `scripts/export_executorch.py`  
+  Lower the one-step wrapper to an ExecuTorch `.pte` with PT2E int8 quantization through the XNNPACK delegate (CPU runtime).
+
 - `understanding_pi0/common/iree_ocp_patch.py`  
   Runtime patches for IREE Turbine / FX importer dtype transport and importer compatibility.
 
@@ -132,6 +135,155 @@ After a successful run you should see:
 - `reports/smolvla_mx/quant_report.json`
 - `reports/smolvla_mx/smolvla_mx_quantized.pt`
 - `reports/smolvla_mx/smolvla_one_step.mlir`
+
+## ExecuTorch (.pte) export — int8
+
+`scripts/export_executorch.py` lowers the same one-step wrapper used by the
+IREE flow to an ExecuTorch `.pte` for the XNNPACK CPU delegate, with
+post-training int8 quantization through the **PT2E** flow
+(`torch.export` → `prepare_pt2e` → calibration → `convert_pt2e`).
+
+> **Why a parallel venv?** ExecuTorch 1.1.x pins `torchao==0.15` while the
+> IREE/MX flow in this repo pins `torchao==0.16`. The two cannot coexist
+> in a single resolved environment, so we keep a dedicated
+> `.venv-executorch/` next to the default `.venv/` and switch by pointing
+> `python` at the right interpreter.
+
+### 1. Create the parallel venv
+
+From the repo root (and with a sibling `lerobot` checkout at `../lerobot`,
+same as for the IREE flow):
+
+```bash
+# Create the parallel venv
+uv venv .venv-executorch --python 3.12
+
+# Reusable shorthand for the rest of this section
+EVDEV_OVERRIDE=$(printf "evdev ; sys_platform == 'none'\n")
+
+# 1) Install ExecuTorch + ml-dtypes + safetensors. The --override silences
+#    the evdev / pynput build issue documented in pyproject.toml [tool.uv]
+#    (same workaround the default `uv sync` uses).
+VIRTUAL_ENV="$(pwd)/.venv-executorch" uv pip install \
+  --python .venv-executorch/bin/python \
+  --override <(echo "$EVDEV_OVERRIDE") \
+  "executorch>=1.1.0,<2.0" \
+  ml-dtypes safetensors
+
+# 2) Install lerobot[smolvla] EDITABLE from the sibling checkout. A non-
+#    editable file:// install copies the source into site-packages and
+#    confuses the lerobot.policies package layout, so use -e here.
+VIRTUAL_ENV="$(pwd)/.venv-executorch" uv pip install \
+  --python .venv-executorch/bin/python \
+  --override <(echo "$EVDEV_OVERRIDE") \
+  -e "../lerobot[smolvla]"
+
+# 3) Pin transformers==5.3.0. Newer transformers (5.8+) makes
+#    PretrainedConfig a dataclass with default fields, which trips the
+#    `non-default argument follows default argument` error in
+#    lerobot.policies.groot.groot_n1.GR00TN15Config and crashes the
+#    `from lerobot.policies.smolvla...` import we use here.
+VIRTUAL_ENV="$(pwd)/.venv-executorch" uv pip install \
+  --python .venv-executorch/bin/python \
+  --override <(echo "$EVDEV_OVERRIDE") \
+  "transformers==5.3.0"
+```
+
+This pulls in `torch==2.10`, `torchao==0.15`, `transformers==5.3.0`, the
+XNNPACK backend, and the PT2E quantization helpers.
+
+Smoke-test the imports:
+
+```bash
+.venv-executorch/bin/python - <<'PY'
+from executorch.exir import to_edge_transform_and_lower
+from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
+from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
+    XNNPACKQuantizer, get_symmetric_quantization_config,
+)
+from torchao.quantization.pt2e.quantize_pt2e import prepare_pt2e, convert_pt2e
+print("executorch imports ok")
+PY
+```
+
+> A torchao log line about "Skipping import of cpp extensions due to
+> incompatible torch version 2.10.0+cu128" is expected — ExecuTorch's
+> Python-only path does not need those C++ kernels.
+
+### 2. Run the int8 export
+
+XNNPACK is CPU-only and the int8 PT2E flow prefers fp32 weights, so the
+defaults below are the safe path. The XNNPACK serializer shells out to
+`flatc`, which ExecuTorch ships at `.venv-executorch/bin/flatc` — calling
+the interpreter directly does **not** activate the venv, so prepend the
+bin dir to `PATH` (or `source .venv-executorch/bin/activate` first).
+
+The script automatically neutralizes lerobot's
+`smolvlm_with_expert._fp8_quantize_dequantize` round-trip on Q/K/V/probs
+(it is there to expose FP8 in the MLIR/IREE flow). ExecuTorch's memory
+planner has no size for `float8_e4m3fn`, so without the patch the lower
+step crashes with `KeyError: torch.float8_e4m3fn` — see the
+`_disable_smolvla_fp8_roundtrip()` helper at the top of
+`scripts/export_executorch.py`.
+
+This is the exact command we used to produce
+`reports/smolvla_executorch/smolvla_one_step_int8.pte`:
+
+```bash
+PATH="$(pwd)/.venv-executorch/bin:$PATH" \
+.venv-executorch/bin/python scripts/export_executorch.py \
+  --model-id lerobot/smolvla_base \
+  --load-device cpu \
+  --export-device cpu \
+  --export-dtype fp32 \
+  --calibration-iters 1 \
+  --image-h 128 --image-w 128 --prompt-len 4 \
+  --out reports/smolvla_executorch/smolvla_one_step_int8.pte
+```
+
+Smaller `--image-h/w` and `--prompt-len` are not about correctness — they
+just cap the activation tensor sizes during XNNPACK lowering and
+flatbuffer serialization. SmolVLA is ~3.5 B parameters and the lowering
+peak can blow past 60 GB resident; the values above were sufficient on a
+128 GiB host.
+
+What the script does:
+
+1. Loads `lerobot/smolvla_base` (CUDA is fine for the HF download/init).
+2. Builds dummy processed inputs and casts both the model and the inputs
+   to CPU + fp32 for `torch.export.export(...)`.
+3. Wires up `XNNPACKQuantizer` (per-channel symmetric int8 by default),
+   runs `prepare_pt2e`, calibrates with `--calibration-iters` dummy
+   samples, then runs `convert_pt2e`.
+4. Re-exports the quantized graph and lowers it through
+   `to_edge_transform_and_lower([XnnpackPartitioner()]).to_executorch()`.
+5. Writes the `.pte` to `--out`.
+
+Useful flags:
+
+- `--no-quant` — skip PT2E and lower the fp32 graph as-is (handy for
+  validating that the lowering path works before paying the PT2E cost).
+- `--per-tensor` — per-tensor instead of per-channel weight quantization.
+- `--dynamic` — dynamic activation quantization (no calibration).
+- `--calibration-iters N` — number of dummy samples for static
+  activation calibration.
+- `--load-device cpu` — use if CUDA is unavailable (slower load).
+
+### 3. Expected output
+
+```
+reports/smolvla_executorch/smolvla_one_step_int8.pte   # ~1.5 GiB
+```
+
+The first 4 bytes are the size header and bytes 4..8 spell `ET12` (the
+canonical ExecuTorch flatbuffer magic). The file is self-contained and
+can be loaded by any ExecuTorch runtime build that includes the XNNPACK
+backend.
+
+> If the int8 run OOMs on your machine, drop `--calibration-iters` to 1,
+> shrink `--image-h/w` and `--prompt-len`, and retry. The XNNPACK
+> partitioner + flatbuffer serializer is the memory peak — both scale
+> with the activation tensor sizes you exported with.
 
 ## PI0 Model
 

@@ -19,6 +19,12 @@ dependencies = [
 export_iree = [
   "iree-turbine",
 ]
+# NOTE: executorch pins its own torchao (==0.15 for 1.1.x) which conflicts
+# with the project's torchao==0.16 pin used by the IREE / MX flow. Install
+# this extra in a separate venv (or re-sync after IREE work).
+export_executorch = [
+  "executorch>=1.1.0,<2.0",
+]
 
 [tool.uv]
 # evdev is pulled in by lerobot -> pynput -> evdev (Linux only).
